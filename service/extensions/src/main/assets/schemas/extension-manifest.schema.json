@@ -16,7 +16,7 @@
     "license": { "type": "string", "minLength": 1, "maxLength": 40 },
     "icon": { "$ref": "#/$defs/packagePath" },
     "entrypoint": { "$ref": "#/$defs/packagePath" },
-    "permissions": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "enum": ["network", "metadata", "artwork", "download"] } },
+    "permissions": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "enum": ["network", "metadata", "artwork", "lyrics", "catalog", "download"] } },
     "network_hosts": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "format": "hostname", "maxLength": 253 } },
     "min_app_version": { "$ref": "#/$defs/version" }
   },

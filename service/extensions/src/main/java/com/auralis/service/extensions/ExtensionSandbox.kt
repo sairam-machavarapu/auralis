@@ -25,9 +25,16 @@ data class ExtensionSearchOptions(val limit: Int = 25, val offset: Int = 0)
 data class ExtensionSearchResult(val json: String)
 data class ExtensionMetadataResult(val json: String)
 data class ExtensionArtworkResult(val json: String)
+data class ExtensionLyricsResult(val json: String)
+data class ExtensionAlbumResult(val json: String)
+data class ExtensionArtistResult(val json: String)
+data class ExtensionPlaylistResult(val json: String)
+data class ExtensionHomeFeedResult(val json: String)
+data class ExtensionDownloadResult(val json: String)
 
 enum class ExtensionCapability(val wireName: String) {
-    Network("network"), Metadata("metadata"), Artwork("artwork");
+    Network("network"), Metadata("metadata"), Artwork("artwork"), Lyrics("lyrics"),
+    Catalog("catalog"), Download("download");
     companion object { fun fromWire(value: String) = entries.firstOrNull { it.wireName == value } }
 }
 
@@ -168,6 +175,22 @@ class ExtensionSandboxHost private constructor(private val context: Context, pri
             .put("options", JSONObject().put("limit", options.limit.coerceIn(1, 100)).put("offset", options.offset.coerceAtLeast(0))).toString()))
     suspend fun metadata(id: String, trackId: String) = ExtensionMetadataResult(invoke(id, "get_metadata", "metadata", JSONObject().put("id", trackId.take(500)).toString()))
     suspend fun artwork(id: String, artworkId: String) = ExtensionArtworkResult(invoke(id, "get_artwork", "artwork", JSONObject().put("id", artworkId.take(500)).toString()))
+    suspend fun lyrics(id: String, trackId: String) = ExtensionLyricsResult(
+        invoke(id, "get_lyrics", "lyrics", identifierPayload(trackId)))
+    suspend fun album(id: String, albumId: String) = ExtensionAlbumResult(
+        invoke(id, "get_album", "catalog", identifierPayload(albumId)))
+    suspend fun artist(id: String, artistId: String) = ExtensionArtistResult(
+        invoke(id, "get_artist", "catalog", identifierPayload(artistId)))
+    suspend fun playlist(id: String, playlistId: String) = ExtensionPlaylistResult(
+        invoke(id, "get_playlist", "catalog", identifierPayload(playlistId)))
+    suspend fun homeFeed(id: String, options: ExtensionSearchOptions = ExtensionSearchOptions()) = ExtensionHomeFeedResult(
+        invoke(id, "get_home_feed", "catalog", optionsPayload(options)))
+    suspend fun resolveDownload(id: String, trackId: String) = ExtensionDownloadResult(
+        invoke(id, "resolve_download", "download", identifierPayload(trackId)))
+
+    private fun identifierPayload(value: String) = JSONObject().put("id", value.take(500)).toString()
+    private fun optionsPayload(options: ExtensionSearchOptions) = JSONObject().put("options", JSONObject()
+        .put("limit", options.limit.coerceIn(1, 100)).put("offset", options.offset.coerceAtLeast(0))).toString()
 
     private suspend fun invoke(id: String, export: String, permission: String, payload: String): String {
         val runtime = runtimes[id] ?: throw ExtensionRuntimeFailure.Stopped(status(id).reason ?: "Extension is not running.")

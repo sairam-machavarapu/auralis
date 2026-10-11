@@ -15,7 +15,7 @@ object RegistrySchemas {
     private val idPattern = Regex("[a-z0-9][a-z0-9._-]{1,63}")
     private val versionPattern = Regex("\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?")
     private val shaPattern = Regex("[0-9a-fA-F]{64}")
-    private val permissions = setOf("network", "metadata", "artwork", "download")
+    private val permissions = setOf("network", "metadata", "artwork", "lyrics", "catalog", "download")
 
     fun parseRegistry(text: String): RegistryDocument = wrap {
         val root = JSONObject(text)

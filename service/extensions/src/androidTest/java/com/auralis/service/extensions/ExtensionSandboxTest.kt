@@ -29,6 +29,35 @@ class ExtensionSandboxTest {
         host.stop(fixture.id)
     }
 
+    @Test fun extendedCapabilitiesUseDedicatedPermissionsAndExports() = runBlocking {
+        val declared = listOf("metadata", "artwork", "lyrics", "catalog", "download")
+        val fixture = fixture("extended-provider", declared)
+        val store = ExtensionPermissionStore(context).also { permissionStore ->
+            permissionStore.clear(fixture.id)
+            declared.forEach { permissionStore.set(fixture.id, it, declared, true) }
+        }
+        val host = ExtensionSandboxHost(context, store, { SampleModule() })
+        host.start(fixture)
+        assertTrue(host.lyrics(fixture.id, "track").json.contains("get_lyrics"))
+        assertTrue(host.album(fixture.id, "album").json.contains("get_album"))
+        assertTrue(host.artist(fixture.id, "artist").json.contains("get_artist"))
+        assertTrue(host.playlist(fixture.id, "playlist").json.contains("get_playlist"))
+        assertTrue(host.homeFeed(fixture.id).json.contains("get_home_feed"))
+        assertTrue(host.resolveDownload(fixture.id, "track").json.contains("resolve_download"))
+        host.stop(fixture.id)
+    }
+
+    @Test fun downloadResolutionIsDeniedWithoutDownloadGrant() = runBlocking {
+        val fixture = fixture("download-denied", listOf("metadata", "download"))
+        val store = ExtensionPermissionStore(context).also { it.clear(fixture.id) }
+        val host = ExtensionSandboxHost(context, store, { SampleModule() })
+        host.start(fixture)
+        assertThrows(ExtensionRuntimeFailure.Permission::class.java) {
+            runBlocking { host.resolveDownload(fixture.id, "track") }
+        }
+        host.stop(fixture.id)
+    }
+
     @Test fun crashingExtensionIsStoppedWithoutEscapingHost() {
         val fixture = fixture("crash-provider")
         val store = ExtensionPermissionStore(context).also { it.clear(fixture.id); it.set(fixture.id, "metadata", fixture.permissions, true) }
@@ -53,13 +82,14 @@ class ExtensionSandboxTest {
         assertTrue(host.status(fixture.id).stopped)
     }
 
-    private fun fixture(id: String = "sample-provider"): InstalledExtension {
+    private fun fixture(id: String = "sample-provider", declared: List<String> = listOf("metadata", "artwork")): InstalledExtension {
         val root = File(context.cacheDir, "sandbox-test-$id").apply { deleteRecursively(); mkdirs() }
         File(root, "extension.wasm").writeBytes(sampleWasm())
         File(root, "icon.png").writeBytes(byteArrayOf(1))
-        File(root, "manifest.json").writeText("""{"schema_version":1,"id":"$id","display_name":"Sample Provider","version":"1.0.0","description":"Day 15 sandbox sample","author":"Auralis","homepage":"https://example.com","license":"MIT","icon":"icon.png","entrypoint":"extension.wasm","permissions":["metadata","artwork"],"network_hosts":[],"min_app_version":"1.0.0"}""")
+        val permissionJson = declared.joinToString(",") { "\"$it\"" }
+        File(root, "manifest.json").writeText("""{"schema_version":1,"id":"$id","display_name":"Sample Provider","version":"1.0.0","description":"Day 15 sandbox sample","author":"Auralis","homepage":"https://example.com","license":"MIT","icon":"icon.png","entrypoint":"extension.wasm","permissions":[$permissionJson],"network_hosts":[],"min_app_version":"1.0.0"}""")
         return InstalledExtension(id, "Sample Provider", "1.0.0", "Day 15 sandbox sample", true,
-            listOf("metadata", "artwork"), 0, 0, root.absolutePath)
+            declared, 0, 0, root.absolutePath)
     }
 
     private class SampleModule : SandboxedModule {
