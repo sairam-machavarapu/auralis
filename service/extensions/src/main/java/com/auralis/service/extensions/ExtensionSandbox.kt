@@ -83,10 +83,12 @@ class ExtensionNetworkClient {
         if (!uri.scheme.equals("https", true) || uri.userInfo != null || allowedHosts.none { allowed ->
                 host == allowed.lowercase() || host.endsWith(".${allowed.lowercase()}")
             }) throw ExtensionRuntimeFailure.Host(host)
+        throttleIfRequired(host)
         val connection = URL(url).openConnection() as HttpURLConnection
         return try {
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 5_000; connection.readTimeout = 5_000
+            connection.setRequestProperty("User-Agent", USER_AGENT)
             if (connection.responseCode !in 200..299) throw ExtensionRuntimeFailure.Stopped("The provider returned HTTP ${connection.responseCode}.")
             if (connection.contentLengthLong > MAX_RESPONSE_BYTES) throw ExtensionRuntimeFailure.Stopped("The provider response is too large.")
             connection.inputStream.use { input ->
@@ -100,7 +102,23 @@ class ExtensionNetworkClient {
             }
         } finally { connection.disconnect() }
     }
-    companion object { const val MAX_RESPONSE_BYTES = 2 * 1024 * 1024 }
+    private fun throttleIfRequired(host: String) {
+        if (host != MUSICBRAINZ_HOST) return
+        synchronized(musicBrainzRateLimitLock) {
+            val waitMillis = MUSICBRAINZ_INTERVAL_MS - (System.currentTimeMillis() - lastMusicBrainzRequestAt)
+            if (waitMillis > 0) Thread.sleep(waitMillis)
+            lastMusicBrainzRequestAt = System.currentTimeMillis()
+        }
+    }
+
+    companion object {
+        const val MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+        private const val USER_AGENT = "Auralis/2.0 (https://github.com/sairam-machavarapu/auralis)"
+        private const val MUSICBRAINZ_HOST = "musicbrainz.org"
+        private const val MUSICBRAINZ_INTERVAL_MS = 1_000L
+        private val musicBrainzRateLimitLock = Any()
+        @Volatile private var lastMusicBrainzRequestAt = 0L
+    }
 }
 
 /** The only I/O syscall exposed to guest modules. The guest supplies URL and output buffers. */
@@ -109,6 +127,10 @@ internal class ExtensionHttpBridge(
     private val granted: () -> Set<String>,
     private val client: ExtensionNetworkClient = ExtensionNetworkClient()
 ) {
+    val abortFunction = HostFunction("env", "abort", FunctionType.of(
+        listOf(ValType.I32, ValType.I32, ValType.I32, ValType.I32), emptyList()
+    )) { _, _ -> throw ExtensionRuntimeFailure.Stopped("The extension aborted execution.") }
+
     val function = HostFunction("auralis", "http_get", FunctionType.of(
         listOf(ValType.I32, ValType.I32, ValType.I32, ValType.I32), listOf(ValType.I32)
     )) { instance, arguments ->
@@ -165,7 +187,10 @@ internal class ChicorySandboxedModule(file: File, httpBridge: ExtensionHttpBridg
         if (memory != null && memory.initialPages() > MAX_MEMORY_PAGES)
             throw ExtensionRuntimeFailure.MemoryLimit()
         instance = Instance.builder(module)
-            .withImportValues(ImportValues.builder().addFunction(httpBridge.function).build())
+            .withImportValues(ImportValues.builder()
+                .addFunction(httpBridge.abortFunction)
+                .addFunction(httpBridge.function)
+                .build())
             .withMemoryLimits(MemoryLimits(1, MAX_MEMORY_PAGES))
             .withUnsafeExecutionListener { _, _ ->
                 if (instructionCount.incrementAndGet() > MAX_INSTRUCTIONS) throw ExtensionRuntimeFailure.CpuLimit()
@@ -268,5 +293,5 @@ class ExtensionSandboxHost private constructor(private val context: Context, pri
             throw failure
         }
     }
-    companion object { const val CALL_TIMEOUT_MS = 2_000L }
+    companion object { const val CALL_TIMEOUT_MS = 8_000L }
 }
