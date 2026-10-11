@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://auralis.app/schemas/extension-manifest.schema.json",
+  "title": "Auralis extension manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "display_name", "version", "description", "author", "homepage", "license", "icon", "entrypoint", "permissions", "network_hosts", "min_app_version"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$" },
+    "display_name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "version": { "$ref": "#/$defs/version" },
+    "description": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "author": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "homepage": { "$ref": "#/$defs/httpsUrl" },
+    "license": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "icon": { "$ref": "#/$defs/packagePath" },
+    "entrypoint": { "$ref": "#/$defs/packagePath" },
+    "permissions": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "enum": ["network", "metadata", "artwork", "download"] } },
+    "network_hosts": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "format": "hostname", "maxLength": 253 } },
+    "min_app_version": { "$ref": "#/$defs/version" }
+  },
+  "$defs": {
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$", "maxLength": 48 },
+    "httpsUrl": { "type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048 },
+    "packagePath": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^(?!/)(?!.*\\.\\.)(?!.*\\\\).+$" }
+  }
+}

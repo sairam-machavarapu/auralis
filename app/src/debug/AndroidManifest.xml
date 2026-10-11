@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name=".ScannerBenchmarkActivity" android:exported="true" android:permission="android.permission.DUMP" />
+        <receiver android:name=".ScannerBenchmarkReceiver" android:exported="true" android:permission="android.permission.DUMP" />
+    </application>
+</manifest>

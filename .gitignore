@@ -1,0 +1,33 @@
+# Android Studio and Gradle
+.gradle/
+.kotlin/
+.idea/
+**/build/
+*.iml
+
+# Local SDKs, caches and machine configuration
+local.properties
+tools/
+tmp/
+
+# Signing material and secrets
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+*.properties.local
+
+# Generated deliverables and device captures
+output/
+captures/
+*.apk
+*.aab
+
+# Separate extension repository kept beside the app source
+auralis-extensions/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini

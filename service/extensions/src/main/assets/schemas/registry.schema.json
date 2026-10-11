@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://auralis.app/schemas/registry.schema.json",
+  "title": "Auralis extension registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "updated_at", "extensions"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "updated_at": { "type": "string", "format": "date-time", "maxLength": 64 },
+    "extensions": {
+      "type": "array", "maxItems": 2000,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "display_name", "version", "description", "download_url", "sha256", "icon_url", "category", "tags", "min_app_version"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$" },
+          "display_name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "version": { "$ref": "#/$defs/version" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "download_url": { "$ref": "#/$defs/httpsUrl" },
+          "sha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+          "icon_url": { "$ref": "#/$defs/httpsUrl" },
+          "category": { "type": "string", "minLength": 1, "maxLength": 40 },
+          "tags": { "type": "array", "maxItems": 24, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+          "min_app_version": { "$ref": "#/$defs/version" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$", "maxLength": 48 },
+    "httpsUrl": { "type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048 }
+  }
+}
