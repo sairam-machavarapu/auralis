@@ -54,6 +54,8 @@ import com.auralis.feature.extensions.ExtensionsScreen
 import com.auralis.feature.downloads.DownloadsScreen
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.graphics.Color
@@ -317,6 +319,17 @@ private fun SettingsScreen(theme: Boolean?, setTheme: (Boolean?) -> Unit, glassM
     val context = LocalContext.current
     val p = LocalGlassPalette.current
     val batterySaver = remember { (context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager).isPowerSaveMode }
+    val updateScope = rememberCoroutineScope()
+    var checkingForUpdate by remember { mutableStateOf(false) }
+    var updateResult by remember { mutableStateOf<AppUpdateResult?>(null) }
+    fun checkForUpdate() {
+        if (checkingForUpdate) return
+        checkingForUpdate = true
+        updateScope.launch {
+            updateResult = AppUpdateChecker.check(BuildConfig.VERSION_NAME)
+            checkingForUpdate = false
+        }
+    }
     LazyColumn(Modifier.fillMaxSize(), contentPadding=PaddingValues(start=24.dp,end=24.dp,top=132.dp,bottom=228.dp),
         verticalArrangement=Arrangement.spacedBy(16.dp)) {
         item { Text("Make Auralis yours", color=p.text, style=MaterialTheme.typography.headlineSmall, fontWeight=FontWeight.Bold) }
@@ -343,6 +356,31 @@ private fun SettingsScreen(theme: Boolean?, setTheme: (Boolean?) -> Unit, glassM
         item { GlassSurface(Modifier.fillMaxWidth(),radius=22.dp) { Column(Modifier.padding(18.dp)) {
             Text("Playback",color=p.text,fontWeight=FontWeight.SemiBold); Text("Gapless playback and audio focus follow Android media controls.",color=p.secondary,style=MaterialTheme.typography.bodySmall)
         } } }
+        item { GlassSurface(Modifier.fillMaxWidth(),radius=22.dp) {
+            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                Text("App updates",color=p.text,fontWeight=FontWeight.SemiBold)
+                Text("Installed version ${BuildConfig.VERSION_NAME}",color=p.secondary,style=MaterialTheme.typography.bodySmall)
+                when (val result = updateResult) {
+                    is AppUpdateResult.Available -> {
+                        Text("${result.release.name} is available",color=p.accent,style=MaterialTheme.typography.bodyMedium,fontWeight=FontWeight.SemiBold)
+                        Button(onClick = {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.release.downloadUrl)))
+                        }, modifier=Modifier.heightIn(min=48.dp)) { Text("Download update") }
+                    }
+                    AppUpdateResult.Current -> Text("Auralis is up to date.",color=p.secondary,style=MaterialTheme.typography.bodySmall)
+                    is AppUpdateResult.Failed -> Text(result.message,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
+                    null -> Text("Check GitHub releases for a newer signed version.",color=p.secondary,style=MaterialTheme.typography.bodySmall)
+                }
+                OutlinedButton(onClick=::checkForUpdate, enabled=!checkingForUpdate,
+                    modifier=Modifier.heightIn(min=48.dp)) {
+                    if (checkingForUpdate) {
+                        CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp,color=p.accent)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (checkingForUpdate) "Checking…" else "Check for updates")
+                }
+            }
+        } }
         item { GlassSurface(Modifier.fillMaxWidth(),radius=22.dp) { Column(Modifier.padding(18.dp), verticalArrangement=Arrangement.spacedBy(6.dp)) {
             Text("About Auralis",color=p.text,fontWeight=FontWeight.SemiBold)
             Text("Version ${BuildConfig.VERSION_NAME}",color=p.secondary,style=MaterialTheme.typography.bodySmall)
