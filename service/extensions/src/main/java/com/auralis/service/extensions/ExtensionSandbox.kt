@@ -2,8 +2,12 @@ package com.auralis.service.extensions
 
 import android.content.Context
 import com.dylibso.chicory.runtime.Instance
+import com.dylibso.chicory.runtime.HostFunction
+import com.dylibso.chicory.runtime.ImportValues
 import com.dylibso.chicory.wasm.Parser
+import com.dylibso.chicory.wasm.types.FunctionType
 import com.dylibso.chicory.wasm.types.MemoryLimits
+import com.dylibso.chicory.wasm.types.ValType
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -11,8 +15,10 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.IDN
+import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.URL
 import java.nio.charset.StandardCharsets
@@ -67,7 +73,10 @@ class ExtensionPermissionStore(context: Context) {
 
 /** HTTPS-only client with an exact/subdomain host allowlist and bounded responses. */
 class ExtensionNetworkClient {
-    suspend fun get(url: String, granted: Set<String>, allowedHosts: List<String>): ByteArray = withContext(Dispatchers.IO) {
+    suspend fun get(url: String, granted: Set<String>, allowedHosts: List<String>): ByteArray =
+        withContext(Dispatchers.IO) { getBlocking(url, granted, allowedHosts) }
+
+    internal fun getBlocking(url: String, granted: Set<String>, allowedHosts: List<String>): ByteArray {
         if ("network" !in granted) throw ExtensionRuntimeFailure.Permission("network")
         val uri = runCatching { URI(url) }.getOrNull() ?: throw ExtensionRuntimeFailure.Host("invalid URL")
         val host = uri.host?.let { IDN.toASCII(it).lowercase() } ?: throw ExtensionRuntimeFailure.Host("invalid host")
@@ -75,7 +84,7 @@ class ExtensionNetworkClient {
                 host == allowed.lowercase() || host.endsWith(".${allowed.lowercase()}")
             }) throw ExtensionRuntimeFailure.Host(host)
         val connection = URL(url).openConnection() as HttpURLConnection
-        try {
+        return try {
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 5_000; connection.readTimeout = 5_000
             if (connection.responseCode !in 200..299) throw ExtensionRuntimeFailure.Stopped("The provider returned HTTP ${connection.responseCode}.")
@@ -94,9 +103,55 @@ class ExtensionNetworkClient {
     companion object { const val MAX_RESPONSE_BYTES = 2 * 1024 * 1024 }
 }
 
+/** The only I/O syscall exposed to guest modules. The guest supplies URL and output buffers. */
+internal class ExtensionHttpBridge(
+    private val manifest: ExtensionManifest,
+    private val granted: () -> Set<String>,
+    private val client: ExtensionNetworkClient = ExtensionNetworkClient()
+) {
+    val function = HostFunction("auralis", "http_get", FunctionType.of(
+        listOf(ValType.I32, ValType.I32, ValType.I32, ValType.I32), listOf(ValType.I32)
+    )) { instance, arguments ->
+        val result = runCatching {
+            val requestPointer = arguments[0].toInt()
+            val requestLength = arguments[1].toInt()
+            val outputPointer = arguments[2].toInt()
+            val outputCapacity = arguments[3].toInt()
+            require(requestPointer >= 0 && requestLength in 1..MAX_REQUEST_BYTES && outputPointer >= 0 &&
+                outputCapacity in 1..ExtensionNetworkClient.MAX_RESPONSE_BYTES)
+            val request = JSONObject(instance.memory().readString(requestPointer, requestLength))
+            require(request.keys().asSequence().toSet() == setOf("url"))
+            val response = client.getBlocking(request.getString("url"), granted(), manifest.networkHosts)
+            require(response.size <= outputCapacity)
+            instance.memory().write(outputPointer, response)
+            response.size
+        }.getOrElse { error ->
+            when (error) {
+                is ExtensionRuntimeFailure.Permission -> ERROR_PERMISSION
+                is ExtensionRuntimeFailure.Host -> ERROR_HOST
+                is ExtensionRuntimeFailure.Timeout -> ERROR_TIMEOUT
+                is ExtensionRuntimeFailure.Stopped -> ERROR_NETWORK
+                is SocketTimeoutException -> ERROR_TIMEOUT
+                is IOException -> ERROR_NETWORK
+                else -> ERROR_INVALID_REQUEST
+            }
+        }
+        longArrayOf(result.toLong())
+    }
+
+    companion object {
+        const val MAX_REQUEST_BYTES = 8 * 1024
+        const val ERROR_PERMISSION = -1
+        const val ERROR_HOST = -2
+        const val ERROR_TIMEOUT = -3
+        const val ERROR_NETWORK = -4
+        const val ERROR_INVALID_REQUEST = -5
+    }
+}
+
 internal interface SandboxedModule : AutoCloseable { fun call(export: String, json: String): String }
 
-internal class ChicorySandboxedModule(file: File) : SandboxedModule {
+internal class ChicorySandboxedModule(file: File, httpBridge: ExtensionHttpBridge) : SandboxedModule {
     private val instructionCount = AtomicLong()
     private val module = Parser.parse(file)
     private val instance: Instance
@@ -110,6 +165,7 @@ internal class ChicorySandboxedModule(file: File) : SandboxedModule {
         if (memory != null && memory.initialPages() > MAX_MEMORY_PAGES)
             throw ExtensionRuntimeFailure.MemoryLimit()
         instance = Instance.builder(module)
+            .withImportValues(ImportValues.builder().addFunction(httpBridge.function).build())
             .withMemoryLimits(MemoryLimits(1, MAX_MEMORY_PAGES))
             .withUnsafeExecutionListener { _, _ ->
                 if (instructionCount.incrementAndGet() > MAX_INSTRUCTIONS) throw ExtensionRuntimeFailure.CpuLimit()
@@ -141,11 +197,12 @@ internal class ChicorySandboxedModule(file: File) : SandboxedModule {
 }
 
 class ExtensionSandboxHost private constructor(private val context: Context, private val permissions: ExtensionPermissionStore,
-    private val moduleFactory: (File) -> SandboxedModule) {
+    private val moduleFactory: (File, ExtensionManifest, () -> Set<String>) -> SandboxedModule) {
     constructor(context: Context, permissions: ExtensionPermissionStore = ExtensionPermissionStore(context)) :
-        this(context, permissions, ::ChicorySandboxedModule)
+        this(context, permissions, { file, manifest, grants -> ChicorySandboxedModule(file, ExtensionHttpBridge(manifest, grants)) })
     internal constructor(context: Context, permissions: ExtensionPermissionStore, moduleFactory: (File) -> SandboxedModule,
-        @Suppress("UNUSED_PARAMETER") testing: Unit = Unit) : this(context, permissions, moduleFactory)
+        @Suppress("UNUSED_PARAMETER") testing: Unit = Unit) :
+        this(context, permissions, { file, _, _ -> moduleFactory(file) })
     private data class Runtime(val manifest: ExtensionManifest, val module: SandboxedModule,
         val executor: java.util.concurrent.ExecutorService, val dispatcher: ExecutorCoroutineDispatcher)
     private val runtimes = ConcurrentHashMap<String, Runtime>()
@@ -159,7 +216,9 @@ class ExtensionSandboxHost private constructor(private val context: Context, pri
             val root = File(installed.installPath)
             val manifest = RegistrySchemas.parseManifest(File(root, "manifest.json").readText())
             val executor = Executors.newSingleThreadExecutor { runnable -> Thread(null, runnable, "auralis-wasm-${installed.id}", 2L * 1024 * 1024) }
-            val module = moduleFactory(File(root, manifest.entrypoint))
+            val module = moduleFactory(File(root, manifest.entrypoint), manifest) {
+                permissions.granted(installed.id, manifest.permissions)
+            }
             runtimes[installed.id] = Runtime(manifest, module, executor, executor.asCoroutineDispatcher())
             statuses.remove(installed.id)
         } catch (error: Throwable) {
@@ -196,7 +255,9 @@ class ExtensionSandboxHost private constructor(private val context: Context, pri
         val runtime = runtimes[id] ?: throw ExtensionRuntimeFailure.Stopped(status(id).reason ?: "Extension is not running.")
         if (permission !in permissions.granted(id, runtime.manifest.permissions)) throw ExtensionRuntimeFailure.Permission(permission)
         return try { withContext(Dispatchers.IO + supervisor) {
-            val future = runtime.executor.submit<String> { runtime.module.call(export, payload) }
+            val future = runtime.executor.submit<String> {
+                ExtensionProtocol.validate(export, runtime.module.call(export, payload))
+            }
             try { future.get(CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS) }
             catch (_: java.util.concurrent.TimeoutException) { future.cancel(true); throw ExtensionRuntimeFailure.Timeout() }
         } }
